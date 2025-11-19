@@ -1,11 +1,15 @@
-from fastapi import FastAPI, Depends, HTTPException, Path, Body
+from fastapi import FastAPI, Depends, HTTPException, Path, Body,UploadFile, File
+from pypdf import PdfReader
 from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, create_engine, func
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship, Session
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime
+import json
+import ollama
 import uvicorn
+import io
 
 DATABASE_URL = "sqlite:///./flashcards.db"
 
@@ -153,6 +157,125 @@ def delete_flashcard(card_id: int, db: Session = Depends(get_db)):
     db.delete(card)
     db.commit()
     return {"detail": "Flashcard deleted successfully"}
+
+
+@app.post("/generate_flashcards")
+async def generate_flashcards(file: UploadFile = File(...)):
+    if file.content_type != "application/pdf":
+        raise HTTPException(status_code=400, detail="Invalid file type. Upload a PDF.")
+
+    content = await file.read()
+    reader = PdfReader(io.BytesIO(content))
+
+    pages = []
+    for page in reader.pages:
+        t = page.extract_text()
+        if t and t.strip():
+            pages.append(t.strip())
+
+    if not pages:
+        raise HTTPException(status_code=400, detail="PDF contains no readable text.")
+
+    full_text = " ".join(pages)
+    words = full_text.split()
+    chunks = [" ".join(words[i:i+100]) for i in range(0, len(words), 100)]
+
+    all_flashcards = []
+
+    for chunk in chunks:
+        instruction = """
+You generate flashcards from the given text.
+
+Requirements:
+- Use only information contained in the text.
+- Create concise flashcards.
+- Each flashcard must have:
+    question
+    answer
+    mnemonic (optional)
+- No commentary or explanations.
+- Output strictly in this JSON format:
+
+{
+    "flashcards": [
+        {
+        "question": "...",
+        "answer": "...",
+        "mnemonic": "..."
+        }
+    ]
+}
+
+Text:
+<<<START>>>
+{content}
+<<<END>>>
+""".replace("{content}", chunk)
+
+        result = ollama.generate(
+            model="llama3.2",
+            prompt=instruction,
+            format="json",
+        )
+
+        raw = result["response"].strip()
+
+        try:
+            parsed = json.loads(raw)
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Flashcard model returned invalid JSON: {e}"
+            )
+
+        all_flashcards.extend(parsed.get("flashcards", []))
+
+    # Filter invalid cards before returning
+    cleaned = []
+    for c in all_flashcards:
+        q = c.get("question", "").strip()
+        a = c.get("answer", "").strip()
+        if q and a:
+            cleaned.append({"question": q, "answer": a})
+
+    return {"flashcards": cleaned}
+
+
+
+@app.post("/chatbot")
+async def chatbot(prompt: str = Body(..., embed=True)):
+    instruction = """
+You are a friendly chatbot and will answer the user's question briefly.
+Output strictly in this JSON format:
+
+{
+    "response": "..."
+}
+
+Text:
+<<<START>>>
+{user_prompt}
+<<<END>>>
+""".replace("{user_prompt}", prompt)
+
+    result = ollama.generate(
+        model="llama3.2",
+        prompt=instruction,
+        format="json",
+    )
+
+    raw = result.get("response", "").strip()
+
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail="Model returned invalid JSON"
+        )
+
+    return {"response": parsed.get("response", "")}
+
 
 if __name__ == "__main__":
     uvicorn.run(app)

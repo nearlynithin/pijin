@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import FlashCard from "./FlashCard";
 import DeckReview from "./DeckReview";
+import PDFUpload from "./Pdf";
+import Chatbot from "./Chatbot";
 
 export default function DeckDetail() {
   const { deckId } = useParams();
@@ -47,8 +49,9 @@ export default function DeckDetail() {
       </div>
     );
 
-  return (
-    <div className="p-6">
+    return (
+  <div className="p-6 flex gap-6">
+    <div className="flex-1">
       <div className="flex justify-between mb-6">
         <h1 className="text-2xl font-semibold">Deck {deckId}</h1>
         <button
@@ -58,6 +61,12 @@ export default function DeckDetail() {
           Start Review
         </button>
       </div>
+
+      <PDFUpload
+        deckId={deckId}
+        flashcards={flashcards}
+        setFlashcards={setFlashcards}
+      />
 
       <div className="flex gap-2 mb-6">
         <input
@@ -88,5 +97,11 @@ export default function DeckDetail() {
         ))}
       </div>
     </div>
-  );
+
+    <div className="h-screen">
+      <Chatbot />
+    </div>
+  </div>
+);
+
 }
